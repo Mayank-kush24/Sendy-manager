@@ -21,7 +21,8 @@ import {
     ChevronLeft,
     ChevronRight,
     Settings,
-    User
+    User,
+    BarChart2
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 
@@ -67,6 +68,12 @@ export function Sidebar({ className, mobile, onClose }: SidebarProps) {
             href: "/campaigns",
             icon: Mail,
             active: pathname.startsWith("/campaigns")
+        },
+        {
+            title: "Reports",
+            href: "/reports",
+            icon: BarChart2,
+            active: pathname.startsWith("/reports")
         }
     ];
 
