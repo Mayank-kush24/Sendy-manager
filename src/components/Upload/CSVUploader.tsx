@@ -8,7 +8,10 @@ import { useSendy } from '@/context/SendyContext';
 import { sendyService } from '@/services/sendy';
 import { Card, CardHeader, CardTitle, CardDescription, CardContent } from '../ui/card';
 import { Button } from '../ui/button';
-import { UploadCloud, CheckCircle, Download, AlertCircle, Play, Pause } from 'lucide-react';
+import { Label } from '../ui/label';
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '../ui/select';
+import { Input } from '../ui/input';
+import { UploadCloud, CheckCircle, Download, AlertCircle, Play, Pause, Plus, X } from 'lucide-react';
 import { clsx } from 'clsx';
 import { motion } from 'framer-motion';
 import { 
@@ -62,9 +65,17 @@ interface UploadProgress {
 
 const config = getUploadConfig();
 
+const SENDY_DEFAULT_FIELDS = ['Email', 'Name'] as const;
+// Sentinel for "Don't map" – Radix Select doesn't allow empty string as item value
+const DONT_MAP_VALUE = '__dont_map__';
+
 export const CSVUploader: React.FC<CSVUploaderProps> = ({ list, brandName }) => {
     const { config: sendyConfig } = useSendy();
     const [file, setFile] = useState<File | null>(null);
+    const [csvHeaders, setCsvHeaders] = useState<string[]>([]);
+    const [columnMapping, setColumnMapping] = useState<Record<string, string>>({ Email: '', Name: '' });
+    const [customSendyFields, setCustomSendyFields] = useState<string[]>([]);
+    const [newCustomFieldName, setNewCustomFieldName] = useState('');
     const [status, setStatus] = useState<'idle' | 'uploading' | 'paused' | 'completed' | 'error'>('idle');
     const [stats, setStats] = useState<UploadStats>({ 
         total: 0, 
@@ -105,6 +116,30 @@ export const CSVUploader: React.FC<CSVUploaderProps> = ({ list, brandName }) => 
     });
     const uploadIdRef = useRef<string>('');
     const lastUpdateRef = useRef<number>(0);
+    const columnMappingRef = useRef<Record<string, string>>({});
+
+    // Parse CSV headers when file is selected
+    useEffect(() => {
+        if (!file) {
+            setCsvHeaders([]);
+            setColumnMapping({ Email: '', Name: '' });
+            setCustomSendyFields([]);
+            return;
+        }
+        Papa.parse(file, {
+            header: true,
+            preview: 1,
+            complete: (results) => {
+                const headers = results.meta?.fields || [];
+                setCsvHeaders(headers);
+                const lower = (s: string) => (s || '').toLowerCase();
+                setColumnMapping({
+                    Email: headers.find((h) => lower(h) === 'email') || '',
+                    Name: headers.find((h) => lower(h) === 'name') || '',
+                });
+            },
+        });
+    }, [file]);
 
     // Check for resumable upload on mount
     useEffect(() => {
@@ -169,6 +204,27 @@ export const CSVUploader: React.FC<CSVUploaderProps> = ({ list, brandName }) => 
         }
     };
 
+    const setMapping = (sendyField: string, csvColumn: string) => {
+        setColumnMapping((prev) => ({ ...prev, [sendyField]: csvColumn }));
+    };
+
+    const addCustomSendyField = () => {
+        const name = (newCustomFieldName || '').trim();
+        if (!name || customSendyFields.includes(name) || SENDY_DEFAULT_FIELDS.includes(name)) return;
+        setCustomSendyFields((prev) => [...prev, name]);
+        setColumnMapping((prev) => ({ ...prev, [name]: '' }));
+        setNewCustomFieldName('');
+    };
+
+    const removeCustomSendyField = (fieldName: string) => {
+        setCustomSendyFields((prev) => prev.filter((f) => f !== fieldName));
+        setColumnMapping((prev) => {
+            const next = { ...prev };
+            delete next[fieldName];
+            return next;
+        });
+    };
+
     const resetState = () => {
         setStatus('idle');
         const initialStats = { 
@@ -199,15 +255,14 @@ export const CSVUploader: React.FC<CSVUploaderProps> = ({ list, brandName }) => 
             return { status: 'failed', error: 'No configuration' };
         }
 
-        const keys = Object.keys(row);
-        const emailKey = keys.find(k => k.toLowerCase() === 'email');
-        const nameKey = keys.find(k => k.toLowerCase() === 'name');
+        const mapping = columnMappingRef.current;
+        const emailCol = mapping['Email'];
+        const nameCol = mapping['Name'];
+        const email = emailCol ? (row[emailCol] || '').trim().toLowerCase() : '';
+        const name = nameCol ? (row[nameCol] || '').trim() : '';
 
-        const email = emailKey ? (row[emailKey] || '').trim().toLowerCase() : null;
-        const name = nameKey ? (row[nameKey] || '').trim() : '';
-
-        if (!email || !name) {
-            return { status: 'failed', error: 'Missing name or email' };
+        if (!email) {
+            return { status: 'failed', error: 'Missing email' };
         }
 
         // Skip if already processed (for resume)
@@ -215,15 +270,23 @@ export const CSVUploader: React.FC<CSVUploaderProps> = ({ list, brandName }) => 
             return { status: 'skipped', error: 'Already processed' };
         }
 
+        const customFields: Record<string, string> = {};
+        for (const [sendyField, csvCol] of Object.entries(mapping)) {
+            if (sendyField === 'Email' || sendyField === 'Name' || !csvCol) continue;
+            const val = (row[csvCol] || '').trim();
+            if (val) customFields[sendyField] = val;
+        }
+
         const startTime = Date.now();
-        
+
         try {
             const result = await withRetry(
                 () => sendyService.subscribe(
-                    sendyConfig, 
-                    list.id, 
-                    email, 
-                    name,
+                    sendyConfig,
+                    list.id,
+                    email,
+                    name || undefined,
+                    Object.keys(customFields).length > 0 ? customFields : undefined,
                     config.requestTimeoutMs
                 ),
                 {
@@ -403,6 +466,8 @@ export const CSVUploader: React.FC<CSVUploaderProps> = ({ list, brandName }) => 
 
     const startUpload = async (resumeFromRow = 0) => {
         if (!file || !sendyConfig) return;
+
+        columnMappingRef.current = { ...columnMapping };
 
         // Load resume data if resuming
         let resumeData: UploadProgress | null = null;
@@ -607,16 +672,104 @@ export const CSVUploader: React.FC<CSVUploaderProps> = ({ list, brandName }) => 
                         ) : (
                             <>
                                 <div className="font-medium text-lg">Click to Upload CSV</div>
-                                <p className="text-muted-foreground text-sm mt-1">Columns required: Name, Email</p>
+                                <p className="text-muted-foreground text-sm mt-1">Map your CSV columns to Sendy fields in the next step</p>
                             </>
                         )}
                     </label>
                 </div>
 
+                {status === 'idle' && file && csvHeaders.length > 0 && (
+                    <div className="space-y-4 mb-6">
+                        <div className="text-sm font-medium text-foreground">Map CSV columns to Sendy fields</div>
+                        <p className="text-muted-foreground text-sm">
+                            Choose which CSV column goes to each Sendy field. Email is required.
+                        </p>
+                        <div className="space-y-3">
+                            {SENDY_DEFAULT_FIELDS.map((sendyField) => (
+                                <div key={sendyField} className="flex items-center gap-3">
+                                    <Label className="w-24 shrink-0">
+                                        {sendyField}
+                                        {sendyField === 'Email' && <span className="text-destructive ml-0.5">*</span>}
+                                    </Label>
+                                    <Select
+                                        value={columnMapping[sendyField] || DONT_MAP_VALUE}
+                                        onValueChange={(val) => setMapping(sendyField, val === DONT_MAP_VALUE ? '' : val)}
+                                    >
+                                        <SelectTrigger className="flex-1">
+                                            <SelectValue placeholder={sendyField === 'Email' ? 'Select column…' : '— Don\'t map'} />
+                                        </SelectTrigger>
+                                        <SelectContent>
+                                            {sendyField !== 'Email' && (
+                                                <SelectItem value={DONT_MAP_VALUE}>— Don&apos;t map</SelectItem>
+                                            )}
+                                            {csvHeaders.map((h) => (
+                                                <SelectItem key={h} value={h}>
+                                                    {h}
+                                                </SelectItem>
+                                            ))}
+                                        </SelectContent>
+                                    </Select>
+                                </div>
+                            ))}
+                            {customSendyFields.map((fieldName) => (
+                                <div key={fieldName} className="flex items-center gap-3">
+                                    <Label className="w-24 shrink-0">{fieldName}</Label>
+                                    <Select
+                                        value={columnMapping[fieldName] || DONT_MAP_VALUE}
+                                        onValueChange={(val) => setMapping(fieldName, val === DONT_MAP_VALUE ? '' : val)}
+                                    >
+                                        <SelectTrigger className="flex-1">
+                                            <SelectValue placeholder="— Don't map" />
+                                        </SelectTrigger>
+                                        <SelectContent>
+                                            <SelectItem value={DONT_MAP_VALUE}>— Don&apos;t map</SelectItem>
+                                            {csvHeaders.map((h) => (
+                                                <SelectItem key={h} value={h}>
+                                                    {h}
+                                                </SelectItem>
+                                            ))}
+                                        </SelectContent>
+                                    </Select>
+                                    <Button
+                                        type="button"
+                                        variant="ghost"
+                                        size="icon"
+                                        className="shrink-0 text-muted-foreground hover:text-destructive"
+                                        onClick={() => removeCustomSendyField(fieldName)}
+                                        aria-label={`Remove ${fieldName}`}
+                                    >
+                                        <X className="size-4" />
+                                    </Button>
+                                </div>
+                            ))}
+                        </div>
+                        <div className="flex flex-wrap items-center gap-2">
+                            <Input
+                                placeholder="e.g. UTM"
+                                value={newCustomFieldName}
+                                onChange={(e) => setNewCustomFieldName(e.target.value)}
+                                onKeyDown={(e) => e.key === 'Enter' && (e.preventDefault(), addCustomSendyField())}
+                                className="w-32"
+                            />
+                            <Button type="button" variant="outline" size="sm" onClick={addCustomSendyField}>
+                                <Plus className="size-4 mr-1" />
+                                Add Sendy field
+                            </Button>
+                            <span className="text-xs text-muted-foreground">
+                                Add custom fields that exist on your Sendy list (e.g. UTM)
+                            </span>
+                        </div>
+                    </div>
+                )}
+
                 {status === 'idle' && file && (
                     <div className="space-y-2">
-                        <Button onClick={() => startUpload(0)} className="w-full text-lg py-6">
-                            Start Upload
+                        <Button
+                            onClick={() => startUpload(0)}
+                            className="w-full text-lg py-6"
+                            disabled={csvHeaders.length === 0 || !columnMapping['Email']}
+                        >
+                            {csvHeaders.length > 0 ? 'Confirm & Start Upload' : 'Preparing…'}
                         </Button>
                         {canResume && (
                             <Button 

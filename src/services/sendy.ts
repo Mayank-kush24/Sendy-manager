@@ -32,15 +32,22 @@ export const sendyService = {
         return res.json();
     },
 
-    subscribe: async ({ url, apiKey }: ApiConfig, listId: string, email: string, name?: string, timeout?: number) => {
+    subscribe: async (
+        { url, apiKey }: ApiConfig,
+        listId: string,
+        email: string,
+        name?: string,
+        customFields?: Record<string, string>,
+        timeout?: number
+    ) => {
         const controller = new AbortController();
         const timeoutId = timeout ? setTimeout(() => controller.abort(), timeout) : null;
-        
+
         try {
             const res = await fetch('/api/subscribe', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ url, apiKey, listId, email, name }),
+                body: JSON.stringify({ url, apiKey, listId, email, name, customFields }),
                 signal: controller.signal,
             });
             

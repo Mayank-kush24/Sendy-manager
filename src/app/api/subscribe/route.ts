@@ -3,7 +3,7 @@ import { NextResponse } from 'next/server';
 export async function POST(request: Request) {
     try {
         const body = await request.json();
-        const { url, apiKey, listId, email, name, country, ipaddress, referrer, gdpr, silent, hp } = body;
+        const { url, apiKey, listId, email, name, country, ipaddress, referrer, gdpr, silent, hp, customFields } = body;
 
         if (!url || !apiKey || !listId || !email) {
             return NextResponse.json({ error: 'Missing required parameters' }, { status: 400 });
@@ -18,6 +18,14 @@ export async function POST(request: Request) {
         formData.append('boolean', 'true'); // Force plain text response (true/false) per docs
 
         if (name) formData.append('name', name);
+        // Custom Sendy fields (e.g. UTM) – param name = field name, value = value
+        if (customFields && typeof customFields === 'object') {
+            for (const [fieldName, value] of Object.entries(customFields)) {
+                if (value != null && String(value).trim() !== '') {
+                    formData.append(fieldName, String(value));
+                }
+            }
+        }
         if (country) formData.append('country', country);
         if (ipaddress) formData.append('ipaddress', ipaddress);
         if (referrer) formData.append('referrer', referrer);
